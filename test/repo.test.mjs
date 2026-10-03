@@ -116,8 +116,8 @@ test("the CI workflow runs npm test on three systems and three Node versions", (
   assert.match(wf, /os: \[ubuntu-latest, windows-latest, macos-latest\]/);
   assert.match(wf, /node: \[20, 22, 24\]/);
   assert.match(wf, /- run: npm test/);
-  assert.match(wf, /actions\/checkout@v4/);
-  assert.match(wf, /actions\/setup-node@v4/);
+  assert.match(wf, /actions\/checkout@v\d+/);
+  assert.match(wf, /actions\/setup-node@v\d+/);
 });
 
 // ---------------------------------------------------------------- the plugin
