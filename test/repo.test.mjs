@@ -175,8 +175,8 @@ const readme = () => read("README.md");
 test("the README follows the family's template", () => {
   const text = readme();
   const headings = [...text.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
-  assert.deepEqual(headings, ["What it costs in tokens", "Install", "Use", "What it checks", "In CI", "How it counts tokens", "What was verified, and how", "Files", "License"]);
-  assert.ok(text.startsWith("# claude-md-doctor\n\n[![test](https://github.com/nrzz/claude-md-doctor/actions/workflows/test.yml/badge.svg)](https://github.com/nrzz/claude-md-doctor/actions/workflows/test.yml)\n"));
+  assert.deepEqual(headings, ["What it costs in tokens", "Install", "Use", "What it checks", "In CI", "How it counts tokens", "What was verified, and how", "Files", "Contributing", "Part of the Claude Code toolkit", "License"]);
+  assert.ok(text.startsWith("# claude-md-doctor\n\n[![test](https://github.com/nrzz/claude-md-doctor/actions/workflows/test.yml/badge.svg)](https://github.com/nrzz/claude-md-doctor/actions/workflows/test.yml)"));
   assert.match(text, /npx -y github:nrzz\/claude-md-doctor/);
   assert.match(text, /\/plugin marketplace add nrzz\/claude-md-doctor/);
   assert.match(text, /\/plugin install md-doctor@claude-md-doctor/);
