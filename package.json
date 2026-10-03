@@ -1,0 +1,40 @@
+{
+  "name": "claude-md-doctor",
+  "version": "1.0.0",
+  "description": "Measure what your CLAUDE.md files cost in every Claude Code session, find what is stale, duplicated or better placed in a skill, and write a leaner version.",
+  "type": "module",
+  "bin": {
+    "claude-md-doctor": "bin/claude-md-doctor.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    ".claude-plugin",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "repository": "github:nrzz/claude-md-doctor",
+  "homepage": "https://github.com/nrzz/claude-md-doctor#readme",
+  "bugs": "https://github.com/nrzz/claude-md-doctor/issues",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "claude-md",
+    "anthropic",
+    "tokens",
+    "lint",
+    "linter",
+    "memory",
+    "context",
+    "productivity"
+  ],
+  "author": "Naresh Prabu",
+  "license": "MIT"
+}
