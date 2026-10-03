@@ -128,6 +128,9 @@ export function judgePath(raw, tier, solo, env) {
   if (!candidates.length) return null;
   const found = candidates.find((c) => exists(c));
   if (found) return { token: shown, status: "valid", abs: found };
-  if (GENERATED.has(first.toLowerCase())) return null; // build output that is not built yet
+  // build output that is not built yet; for an absolute path, judged from the project root, so a
+  // project that lives under /tmp or /build is not mistaken for one
+  const top = absolute ? path.relative(env.project, candidates[0]).split(/[\\/]/)[0] : first;
+  if (GENERATED.has(String(top).toLowerCase())) return null;
   return { token: shown, status: "stale", abs: candidates[0] };
 }
