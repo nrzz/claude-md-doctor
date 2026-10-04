@@ -28,7 +28,7 @@ function sourceFiles() {
 
 test("package.json has the fields every repo in the family has", () => {
   assert.equal(pkg.name, "claude-md-doctor");
-  assert.equal(pkg.version, "1.0.1");
+  assert.equal(pkg.version, "1.0.2");
   assert.ok(pkg.description.length > 40);
   assert.equal(pkg.type, "module");
   assert.deepEqual(pkg.bin, { "claude-md-doctor": "bin/claude-md-doctor.mjs" });
@@ -153,13 +153,18 @@ test("the one skill is user-only, has a description under 60 characters, and a s
   assert.equal(fm.name, "md-doctor");
   assert.ok(fm.description.length < 60, fm.description);
   assert.equal(fm["disable-model-invocation"], "true");
+  // Only the plugin's own command is pre-approved (quoted and unquoted), never any node command.
+  assert.equal(fm["allowed-tools"], 'Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/claude-md-doctor.mjs" *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/claude-md-doctor.mjs *)');
   assert.match(text, /!`node "\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/claude-md-doctor\.mjs" "\$\{CLAUDE_PROJECT_DIR\}" --markdown --budget 2000`/);
   assert.match(text, /In at most 8 lines: the fixes that save the most tokens, each with the change to make; edit nothing until the user agrees\./);
   assert.deepEqual(fs.readdirSync(path.join(ROOT, "skills")), ["md-doctor"]);
 });
 
-test("the skill is itself lean: its text is well under 150 tokens", () => {
-  assert.ok(estimateTokens(read("skills/md-doctor/SKILL.md")) < 150);
+test("the skill is itself lean: the text Claude reads when it runs is well under 150 tokens", () => {
+  // The front matter (name, description, allowed-tools) is read by Claude Code, not sent to the model.
+  const body = read("skills/md-doctor/SKILL.md").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
+  assert.notEqual(body, read("skills/md-doctor/SKILL.md"), "the front matter was found");
+  assert.ok(estimateTokens(body) < 150, `${estimateTokens(body)} tokens`);
 });
 
 test("the command the skill runs points at a file that exists in the plugin layout", () => {

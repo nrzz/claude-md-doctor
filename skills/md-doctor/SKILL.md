@@ -2,7 +2,7 @@
 name: md-doctor
 description: Audit CLAUDE.md token cost and waste.
 disable-model-invocation: true
-allowed-tools: Bash(node *)
+allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/claude-md-doctor.mjs" *) Bash(node ${CLAUDE_PLUGIN_ROOT}/bin/claude-md-doctor.mjs *)
 ---
 
 !`node "${CLAUDE_PLUGIN_ROOT}/bin/claude-md-doctor.mjs" "${CLAUDE_PROJECT_DIR}" --markdown --budget 2000`

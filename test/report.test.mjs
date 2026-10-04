@@ -31,7 +31,7 @@ test("the text report shows the load tree, totals, on-demand files and findings"
   const s = busy();
   const m = s.analyze({ budget: 2000 });
   const text = renderText(m);
-  assert.match(text, /^claude-md-doctor 1\.0\.1/);
+  assert.match(text, /^claude-md-doctor 1\.0\.2/);
   assert.match(text, /Always loaded: memory files/);
   assert.match(text, /^ +[\d,]+ {2}CLAUDE\.md$/m);
   assert.match(text, /^ +[\d,]+ {4}@docs\/style\.md$/m, "an import is indented under the file that pulls it in");
@@ -166,7 +166,7 @@ test("the JSON report has the documented top-level shape", () => {
   assert.deepEqual(Object.keys(j), ["schema", "tool", "version", "project", "configDir", "budget", "totals", "files", "tree", "skills", "agents", "onDemand", "findings", "summary", "plan", "fix", "ci"]);
   assert.equal(j.schema, 1);
   assert.equal(j.tool, "claude-md-doctor");
-  assert.equal(j.version, "1.0.1");
+  assert.equal(j.version, "1.0.2");
   assert.equal(j.budget, 2000);
   assert.equal(j.fix, null);
   assert.equal(typeof j.project, "string");

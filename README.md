@@ -57,7 +57,7 @@ A real run, with the paths shortened:
 
 ```text
 $ claude-md-doctor --budget 1500
-claude-md-doctor 1.0.1  token costs are estimates (see README)
+claude-md-doctor 1.0.2  token costs are estimates (see README)
 project  ~/work/shop
 config   ~/.claude
 
@@ -144,7 +144,7 @@ What `--fix` never does: rewrite the user-level memory, a memory file in a paren
 {
   "schema": 1,
   "tool": "claude-md-doctor",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "project": "C:/work/shop",             forward slashes on every system
   "configDir": "C:/Users/me/.claude",
   "budget": 2000,
@@ -167,6 +167,10 @@ What `--fix` never does: rewrite the user-level memory, a memory file in a paren
 - `tree[].note` is `null`, `already loaded` (a repeat import, counted once), `cycle`, `missing`, `too deep` or `unreadable`.
 - `findings` are sorted: errors, then warnings, then notes, the budget finding first, then the biggest `saves`. `line` and `endLine` are 1-based and `null` for a project-wide finding. `tokens` is what the flagged lines cost in every session, `saves` what the fix takes out (0 for a correction or a decision), and `autofix` says whether `--fix` writes it. `detail` holds check-specific data such as the missing path or the slug of a proposed skill.
 - `plan` is what `--fix` would do, whether or not it ran. `fix` is `null` unless `--fix` was given.
+
+### Privacy
+
+md-doctor runs only on your machine. It has no network code, no telemetry and no account, and it sends nothing anywhere. It reads the memory files listed above and the files they import, the skill and agent descriptions in your `skills` and `agents` folders, the project files that name commands (such as `package.json` scripts and the Makefile), and whether the paths your memory files mention exist; it asks git whether `CLAUDE.local.md` is ignored or tracked. It writes nothing unless you ask: `--fix` writes the `.lean` and proposed-skill files described above, and `--fix --write` applies them, after a backup. Questions go to [the issues](https://github.com/nrzz/claude-md-doctor/issues).
 
 ## What it checks
 
