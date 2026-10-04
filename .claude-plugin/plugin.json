@@ -1,5 +1,6 @@
 {
   "name": "md-doctor",
+  "displayName": "MD Doctor",
   "version": "1.0.2",
   "description": "Measure what your CLAUDE.md files cost in every session, find what is stale, duplicated or better placed in a skill, and see the fixes that save the most tokens. One user-only skill: /md-doctor:md-doctor.",
   "author": { "name": "Naresh Prabu" },
