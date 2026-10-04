@@ -10,7 +10,7 @@ claude-md-doctor measures what your `CLAUDE.md` files cost in every Claude Code 
 | --- | --- | --- |
 | The tool: a terminal run, `--json`, `--markdown`, `--fix`, `--ci` | 0 | It reads files. It never calls Claude and never uses the network |
 | The skill in Claude's skill list | 0 | `/md-doctor:md-doctor` is user-only (`disable-model-invocation: true`), which keeps it out of the list Claude Code gives the model. Its description is 37 characters |
-| `/md-doctor:md-doctor` | the report, then one short reply | By this tool's own estimate, about 250 to 400 tokens for a project with a handful of findings and never more than about 1,500, because the report is capped at 25 findings. The reply is at most 8 lines. The free route is the same report in a terminal |
+| `/md-doctor:md-doctor` | the report, then one short reply | By this tool's own estimate, about 250 to 400 tokens for a project with a handful of findings. The report is capped at 25 findings, so it stays bounded, but with many long findings it can reach about 2,000 to 3,000 tokens. The reply is at most 8 lines. The free route is the same report in a terminal |
 | Running it in CI | 0 | |
 
 What it measures is the other side of this table: your memory files, their imports and your skill and agent descriptions are in context at the start of every session, so every token cut from them is saved on every session.
@@ -57,7 +57,7 @@ A real run, with the paths shortened:
 
 ```text
 $ claude-md-doctor --budget 1500
-claude-md-doctor 1.0.0  token costs are estimates (see README)
+claude-md-doctor 1.0.1  token costs are estimates (see README)
 project  ~/work/shop
 config   ~/.claude
 
@@ -101,6 +101,7 @@ NOTE  filler            CLAUDE.md:3  saves ~9 tokens  [--fix]
       fix: Delete the line.
 
 Automatic fixes would change 1 file and take 623 tokens down to about 155 (saves 468, 75%).
+`claude-md-doctor --fix` writes a proposal and leaves your files untouched.
 ```
 
 (Two more findings, `local-not-ignored` and a `conflict`, were cut from this sample.) `[--fix]` marks a finding that `--fix` writes into its proposal. `saves` is what the fix would take out of every session.
@@ -143,7 +144,7 @@ What `--fix` never does: rewrite the user-level memory, a memory file in a paren
 {
   "schema": 1,
   "tool": "claude-md-doctor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "project": "C:/work/shop",             forward slashes on every system
   "configDir": "C:/Users/me/.claude",
   "budget": 2000,
@@ -212,7 +213,7 @@ WARN  stale-command  CLAUDE.md:7
       fix: Add a "lint" script to package.json, or remove the line.
 ```
 
-Commands in backticks and in shell code blocks are checked; in plain prose only the explicit `npm run x` forms are, so "use yarn workspaces" is safe. It stays silent when something else could explain the command: workspace and prefix flags (`--workspace`, `--filter`, `-C`), a `cd` into a folder it cannot see, a script that exists in another package of the repository, tools installed as binaries (`yarn tsc`), a Makefile that includes other files, placeholders such as `<script>`. A near miss is suggested (`did you mean test`).
+Commands in backticks and in shell code blocks are checked; in plain prose only the explicit `npm run x` forms are, so "use yarn workspaces" is safe. It stays silent when something else could explain the command: workspace and prefix flags (`--workspace`, `--filter`, `-C`), a `cd` into a folder it cannot see, a script that exists in another package of the repository, tools installed as binaries (`yarn tsc`), a Makefile that includes other files, placeholders such as `<script>`. A near miss is suggested ("Use `npm run test` if that is what was meant, or remove the line.").
 
 ### `duplicate`
 
@@ -245,7 +246,7 @@ A rule with a different scope ("never run the tests in production" against "alwa
 
 ### `move-to-skill`
 
-A `##` section of more than 350 tokens that reads like a procedure: its heading names one (release, deploy, set up, how to, runbook, migrate and similar), or it has numbered steps, step words ("first", "then", "finally") or a run of shell commands. A skill loads only when it is used, so the section stops costing tokens in every session.
+A `##` section of more than 350 tokens that reads like a procedure: its heading names one (release, deploy, set up, how to, runbook, migrate and similar), or it has at least two of these: numbered steps, step words ("first", "then", "finally"), a run of shell commands. A skill loads only when it is used, so the section stops costing tokens in every session.
 
 ```text
 WARN  move-to-skill  CLAUDE.md:11-28  saves ~444 tokens  [--fix]
@@ -277,7 +278,7 @@ WARN  big-import  CLAUDE.md:11  saves ~1,667 tokens
 
 ### `filler`
 
-Generic lines that do not change what Claude does: "You are a helpful assistant", "write clean code", "follow best practices", "be careful", "think step by step", "double-check your work", "do your best". A line counts only when the phrase makes up most of it, so "follow best practices for React hooks: list every dependency" is kept. "Be concise" and its relatives are real instructions the first time; the repeats are filler.
+Generic lines that do not change what Claude does: "You are a helpful assistant", "write clean code", "follow best practices", "be careful", "think step by step", "double-check your work", "do your best". A line counts only when the phrase makes up most of it: at least half of a line of up to 8 words, at least 60 percent of a line of 9 to 25 words, and never a longer line. So "Be careful with database migrations" and "follow best practices for React hooks: list every dependency" are kept. "Be concise" and its relatives are real instructions the first time; the repeats are filler.
 
 ```text
 NOTE  filler  CLAUDE.md:3  saves ~9 tokens  [--fix]
@@ -353,16 +354,16 @@ What that does not tell you: how close it is to what Claude actually counts. Rea
 
 Checked on 2026-10-04 on Windows 11 with Node 24.19, git 2.55 and Claude Code 2.1.286:
 
-- **487 automated tests** (`npm test`, Node's own runner, no dependencies; one is skipped on Windows because it needs a `|` in a file name).
+- **488 automated tests** (`npm test`, Node's own runner, no dependencies; one is skipped on Windows because it needs a `|` in a file name).
 - **The checks, with true positives and false-positive guards.** Every finding has fixture projects in throwaway folders that must trigger it and ones that must not: URLs, globs, placeholders, dates, `and/or`, build output, gitignored paths, absolute paths, example-marked lines and a Windows path with spaces are not stale paths; an `@` in a code span, a code block, a comment, an e-mail address or `@types/node` is not an import; `use pnpm, not npm` and `npm install -g` are not package-manager conflicts; "follow best practices for React hooks" is not filler.
 - **Imports.** Relative, `~/` (with a temporary home folder), absolute and Windows-style imports, nesting at exactly 5 levels and a sixth, cycles, a file imported twice counted once, a folder and a binary file as targets.
 - **Discovery.** Parent folders up to a ceiling, outermost first; the user memory from a temporary `CLAUDE_CONFIG_DIR`; `--no-user`; on-demand files listed and not counted; a linked `CLAUDE.md` read once.
-- **`--fix` is safe.** Originals are byte for byte unchanged after `--fix`; `--write` makes one backup per file named with the timestamp and never reuses a name; an existing skill folder is never overwritten; user memory, parent files, imports and links out of the project are never rewritten; CRLF and a byte-order mark survive. 200 random memory files check that a lean file is a fixed point (fixing it again changes nothing), that no valid line is lost (it stays in the lean file or in a skill) and that no file gets bigger; 30 more are written to disk and compared with the plan. A longer run of 4,000 random sets of one to three memory files, kept out of `npm test`, found and fixed the cases where a copy standing in for a moved original was missed.
+- **`--fix` is safe.** Originals are byte for byte unchanged after `--fix`; `--write` makes one backup per file named with the timestamp and never reuses a name; an existing skill folder is never overwritten; user memory, parent files, imports and links out of the project are never rewritten; CRLF and a byte-order mark survive. 200 random memory files check that a lean file is a fixed point (fixing it again changes nothing), that no valid line is lost (it stays in the lean file or in a skill) and that no file gets bigger; 30 more are written to disk and compared with the plan. During development, a longer one-off run of 4,000 random sets of one to three memory files (its script is not part of this repository) found the cases where a copy standing in for a moved original was missed; they are fixed, and the 200 above keep checking them.
 - **Robustness.** 300 random inputs made of markdown fragments, unclosed fences, odd Unicode and Windows paths never make the analysis, the fix plan or any report throw. Inputs that could be quadratic (20,000 open brackets, 20,000 spaces inside a rule, 6,000 distinct lines) finish in seconds or less; a memory file of 20,000 lines (about 540,000 tokens) takes a few seconds.
-- **The plugin.** `claude plugin validate .claude-plugin/plugin.json` and `claude plugin validate .` both pass, also with `--strict`, using a throwaway config folder. The skill is user-only, its description is under 60 characters and its whole text is under 150 tokens.
+- **The plugin.** `claude plugin validate .claude-plugin/plugin.json` and `claude plugin validate .` both pass, also with `--strict`, using a throwaway config folder, with Claude Code 2.1.286 and 2.1.289. On 2026-10-04 the plugin installed from GitHub with `/plugin marketplace add nrzz/claude-md-doctor` and `/plugin install md-doctor@claude-md-doctor`. The skill is user-only, its description is under 60 characters and its whole text is under 150 tokens.
 - **Run by hand** against `claude-code-handover`, `claude-code-team-sync` and `claude-code-glow` with an empty config folder: none of the three has a memory file, so each report says "none found" and exits 0. So the tool was also run on temporary copies of each, with a memory file written for the check. In the glow copy it found the `@README.md` import (2,972 tokens, the only reason the total passed the budget), a missing `src/audit.mjs`, an `npm run lint` that glow has no script for, and a filler line, and it left the paths and scripts that do exist alone. In the handover copy, its own `templates/CLAUDE.local.md` put in place, it reported the template's `@HANDOVER.md` import as missing (the template expects that file at the project root) and the file as not git-ignored. In the team-sync copy it found the one missing `docs/guide.md`.
 
-Not verified: how a live Claude Code session loads memory files. The assumptions above come from Claude Code's documented behavior and were not checked against a running session, and neither was the claim that a user-only skill stays out of the model's skill list. Nor was the skill run inside Claude Code, or installed through the marketplace; only the manifests were validated. The token estimate was never compared with Claude's own count. Node 18 was not available, so the code is only checked for Node 18 by a test that scans it for newer APIs; CI runs the tests on Linux, macOS and Windows with Node 20, 22 and 24, all green; its first run caught a Linux-only bug (build-output folders were judged from the drive root, so missing paths under /tmp were ignored), fixed since.
+Not verified: how a live Claude Code session loads memory files. The assumptions above come from Claude Code's documented behavior and were not checked against a running session, and neither was the claim that a user-only skill stays out of the model's skill list. Nor was the skill run inside Claude Code; it was installed through the marketplace, but not invoked. The token estimate was never compared with Claude's own count. The whole suite passes on Node 18.20 as well. CI runs the tests on Linux, macOS and Windows with Node 20, 22 and 24 and on Linux with Node 18, all green; its first run caught a Linux-only bug (build-output folders were judged from the drive root, so missing paths under /tmp were ignored), fixed since.
 
 ## Files
 

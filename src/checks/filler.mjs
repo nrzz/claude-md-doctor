@@ -31,14 +31,16 @@ const CONCISE = [
   /(?:please )?(?:no|avoid) (?:unnecessary|extra) (?:verbosity|explanations?|preamble|words)/,
 ];
 
-// Does a pattern match and cover most of the line? (A rule with real content around it is not filler.)
+// Does a pattern match and cover most of the line? (A rule with real content around it is not filler:
+// "Be careful with database migrations" names what to be careful with.) On a line of up to 8 words
+// the phrase must be at least half of it, on a longer one at least 60 percent.
 function covers(patterns, words) {
   const norm = words.join(" ");
   for (const re of patterns) {
     const m = re.exec(norm);
     if (!m) continue;
     const matched = m[0].trim().split(" ").length;
-    if (words.length <= 8 || matched / words.length >= 0.6) return m[0].trim();
+    if (matched / words.length >= (words.length <= 8 ? 0.5 : 0.6)) return m[0].trim();
   }
   return null;
 }

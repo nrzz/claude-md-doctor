@@ -66,6 +66,7 @@ real("a persona with a specific job", "You are a code reviewer: list only bugs a
 real("a specific quality rule", "Write tests that fail first, then make them pass, and keep each test under twenty lines.");
 real("a specific instruction about being careful", "Be careful with migrations: never edit a file in db/migrations after it has been merged to main.");
 real("an instruction to think about something specific", "Think about backwards compatibility whenever you change a public function signature in the sdk package.");
+real("a short line that names what to be careful with", "Be careful with database migrations.");
 real("a command", "Run `npm test` before you commit.");
 real("a path rule", "Source files live in src/ and tests live in test/.");
 

@@ -50,7 +50,7 @@ test("main() in process: output goes to the given streams and the exit code come
   let err = "";
   const code = await main([s.dir], { stdout: { write: (x) => { out += x; }, isTTY: false }, stderr: { write: (x) => { err += x; } }, env: { ...s.env(), NO_COLOR: "1" }, home: s.home });
   assert.equal(code, 0);
-  assert.match(out, /claude-md-doctor 1\.0\.0/);
+  assert.match(out, /claude-md-doctor 1\.0\.1/);
   assert.equal(err, "");
 });
 

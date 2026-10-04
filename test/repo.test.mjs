@@ -28,7 +28,7 @@ function sourceFiles() {
 
 test("package.json has the fields every repo in the family has", () => {
   assert.equal(pkg.name, "claude-md-doctor");
-  assert.equal(pkg.version, "1.0.0");
+  assert.equal(pkg.version, "1.0.1");
   assert.ok(pkg.description.length > 40);
   assert.equal(pkg.type, "module");
   assert.deepEqual(pkg.bin, { "claude-md-doctor": "bin/claude-md-doctor.mjs" });

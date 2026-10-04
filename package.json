@@ -1,6 +1,6 @@
 {
   "name": "claude-md-doctor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Measure what your CLAUDE.md files cost in every Claude Code session, find what is stale, duplicated or better placed in a skill, and write a leaner version.",
   "type": "module",
   "bin": {
