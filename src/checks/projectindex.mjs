@@ -21,13 +21,14 @@ export class ProjectIndex {
     this.project = project;
     this._scan = null;
     this._pkg = new Map();
+    this._pyproject = new Map();
   }
 
   // One bounded walk: manifests, Makefiles and justfiles up to four folders deep, every file and
   // folder name up to six deep.
   scan() {
     if (this._scan) return this._scan;
-    const out = { manifests: [], makefiles: [], justfiles: [], names: new Map(), truncated: false };
+    const out = { manifests: [], pyprojects: [], makefiles: [], justfiles: [], names: new Map(), truncated: false };
     let entries = 0;
     const walk = (dir, depth) => {
       if (out.truncated) return;
@@ -35,6 +36,7 @@ export class ProjectIndex {
       if (depth <= MANIFEST_DEPTH) {
         const has = (n) => list.some((e) => e.name === n && !e.isDirectory());
         if (has("package.json")) out.manifests.push(dir);
+        if (has("pyproject.toml")) out.pyprojects.push(dir);
         if (MAKEFILES.some(has)) out.makefiles.push(dir);
         if (JUSTFILES.some(has)) out.justfiles.push(dir);
       }
@@ -82,6 +84,18 @@ export class ProjectIndex {
 
   hasAnyManifest() {
     return !!this.pkg(this.project) || this.scan().manifests.length > 0;
+  }
+
+  /** Parsed pyproject.toml in `dir`, or null when there is none. */
+  pyproject(dir) {
+    if (this._pyproject.has(dir)) return this._pyproject.get(dir);
+    const out = readPyproject(dir);
+    this._pyproject.set(dir, out);
+    return out;
+  }
+
+  hasAnyPyproject() {
+    return !!this.pyproject(this.project) || this.scan().pyprojects.length > 0;
   }
 
   /** Files or folders with the same name as `token`'s last segment, as project-relative paths. */
@@ -151,6 +165,75 @@ export function readBuildFile(dir, names, parse) {
 
 export const readMakefile = (dir) => readBuildFile(dir, MAKEFILES, parseMakefile);
 export const readJustfile = (dir) => readBuildFile(dir, JUSTFILES, parseJustfile);
+
+// ---- pyproject.toml tasks (pdm, hatch, poe) ----
+
+/**
+ * { pdmScripts: Set, hatchEnvs: Map<string, Set>, hatchScripts: Set, poeTasks: Set }
+ */
+export function parsePyproject(text) {
+  const pdmScripts = new Set();
+  const hatchEnvs = new Map();
+  const hatchScripts = new Set();
+  const poeTasks = new Set();
+
+  let section = "";
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/(^|\s)#.*$/, "").trim();
+    if (!line) continue;
+
+    const secMatch = /^\[+([A-Za-z0-9_.-]+)\]+$/.exec(line);
+    if (secMatch) {
+      section = secMatch[1];
+      if (section.startsWith("tool.pdm.scripts.")) {
+        const sub = section.slice("tool.pdm.scripts.".length).split(".")[0];
+        if (sub) pdmScripts.add(sub);
+      } else if (section.startsWith("tool.poe.tasks.")) {
+        const sub = section.slice("tool.poe.tasks.".length).split(".")[0];
+        if (sub) poeTasks.add(sub);
+      } else {
+        const hm = /^tool\.hatch\.envs\.([A-Za-z0-9_.-]+)\.scripts(?:\.([A-Za-z0-9_.-]+))?$/.exec(section);
+        if (hm) {
+          const env = hm[1];
+          if (!hatchEnvs.has(env)) hatchEnvs.set(env, new Set());
+          if (hm[2]) {
+            hatchEnvs.get(env).add(hm[2]);
+            hatchScripts.add(hm[2]);
+          }
+        }
+      }
+      continue;
+    }
+
+    const kvMatch = /^(?:([A-Za-z0-9_.-]+)|"([^"]+)"|'([^']+)')\s*=/.exec(line);
+    if (kvMatch) {
+      const key = kvMatch[1] || kvMatch[2] || kvMatch[3];
+      if (section === "tool.pdm.scripts") {
+        pdmScripts.add(key);
+      } else if (section === "tool.poe.tasks") {
+        poeTasks.add(key);
+      } else {
+        const hm = /^tool\.hatch\.envs\.([A-Za-z0-9_.-]+)\.scripts$/.exec(section);
+        if (hm) {
+          const env = hm[1];
+          if (!hatchEnvs.has(env)) hatchEnvs.set(env, new Set());
+          hatchEnvs.get(env).add(key);
+          hatchScripts.add(key);
+        }
+      }
+    }
+  }
+
+  return { pdmScripts, hatchEnvs, hatchScripts, poeTasks };
+}
+
+export function readPyproject(dir) {
+  const file = path.join(dir, "pyproject.toml");
+  if (!isFile(file)) return null;
+  const info = readFileText(file);
+  if (info && !info.binary && !info.tooLarge) return parsePyproject(info.text);
+  return null;
+}
 
 /** Does `node_modules/.bin/<name>` exist in `dir` (a locally installed tool)? */
 export function hasLocalBin(dir, name) {

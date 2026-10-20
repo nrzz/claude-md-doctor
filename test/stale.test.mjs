@@ -244,6 +244,54 @@ test("just without a justfile is stale", () => {
   assert.match(stale(s, "stale-command")[0].message, /there is no justfile/);
 });
 
+test("pdm run with a script that is not in pyproject.toml", () => {
+  const toml = '[tool.pdm.scripts]\nlint = "flake8"\nbuild = "x"\n';
+  const s = project("Run `pdm run deploy`.\n", { "pyproject.toml": toml });
+  const [f] = stale(s, "stale-command");
+  assert.equal(f.severity, "warn");
+  assert.match(f.message, /pyproject\.toml has no "deploy" script/);
+  assert.equal(f.detail.name, "deploy");
+});
+
+test("pdm run without pyproject.toml is stale", () => {
+  const s = project("Run `pdm run lint`.\n");
+  const [f] = stale(s, "stale-command");
+  assert.match(f.message, /there is no pyproject\.toml/);
+});
+
+test("hatch run with a script that is not in pyproject.toml", () => {
+  const toml = '[tool.hatch.envs.default.scripts]\nlint = "flake8"\n';
+  const s = project("Run `hatch run deploy`.\n", { "pyproject.toml": toml });
+  const [f] = stale(s, "stale-command");
+  assert.match(f.message, /pyproject\.toml has no "deploy" script/);
+});
+
+test("hatch run env:script with an env or script that is not in pyproject.toml", () => {
+  const toml = '[tool.hatch.envs.test.scripts]\ncov = "pytest --cov"\n';
+  const s = project("Run `hatch run test:missing` and `hatch run other:cov`.\n", { "pyproject.toml": toml });
+  assert.deepEqual(stale(s, "stale-command").map((f) => f.detail.name).sort(), ["other:cov", "test:missing"]);
+});
+
+test("hatch run without pyproject.toml is stale", () => {
+  const s = project("Run `hatch run lint`.\n");
+  const [f] = stale(s, "stale-command");
+  assert.match(f.message, /there is no pyproject\.toml/);
+});
+
+test("poe with a task that is not in pyproject.toml", () => {
+  const toml = '[tool.poe.tasks]\nlint = "flake8"\n';
+  const s = project("Run `poe deploy`.\n", { "pyproject.toml": toml });
+  const [f] = stale(s, "stale-command");
+  assert.match(f.message, /pyproject\.toml has no "deploy" task/);
+  assert.equal(f.detail.name, "deploy");
+});
+
+test("poe without pyproject.toml is stale", () => {
+  const s = project("Run `poe lint`.\n");
+  const [f] = stale(s, "stale-command");
+  assert.match(f.message, /there is no pyproject\.toml/);
+});
+
 test("dotnet test with a project path that does not exist", () => {
   const s = project("`dotnet test tests/App.Tests/App.Tests.csproj` and `dotnet test src/real.ts`.\n");
   const found = stale(s, "stale-command");
@@ -298,6 +346,21 @@ okCmd("just with flags", "`just --list` and `just -f other deploy`.");
 okCmd("a justfile with imports", "`just anything`.", { justfile: "import 'common.just'\nbuild:\n  echo\n" });
 okCmd("dotnet commands without a path", "`dotnet test`, `dotnet build`, `dotnet run`, `dotnet restore`.");
 okCmd("dotnet with options first", "`dotnet test --no-build` and `dotnet build -c Release`.");
+okCmd("python tasks that exist", "`pdm run lint`, `hatch run lint`, `hatch run test:cov`, `poe format`.", {
+  "pyproject.toml": [
+    "[tool.pdm.scripts]",
+    'lint = "flake8"',
+    "[tool.hatch.envs.default.scripts]",
+    'lint = "flake8"',
+    "[tool.hatch.envs.test.scripts]",
+    'cov = "pytest --cov"',
+    "[tool.poe.tasks]",
+    'format = "black ."',
+  ].join("\n"),
+});
+okCmd("poetry run and uv run are left alone", "`poetry run pytest`, `uv run lint`.");
+okCmd("pdm and hatch commands that are not run", "`pdm install`, `pdm add requests`, `hatch env create`.");
+okCmd("python tasks with placeholders or flags", "`pdm run <task>`, `hatch run $ENV:test`, `poe --help`.");
 
 test("without any package.json there is nothing to compare npm commands with", () => {
   const s = sandbox({ "CLAUDE.md": "Run `npm run build`.\n" });
