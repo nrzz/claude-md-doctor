@@ -2,6 +2,7 @@
 //   npm run x, npm test, pnpm x, pnpm run x, yarn x, yarn run x, bun run x   a package.json script
 //   make x                                                                   a Makefile target
 //   just x                                                                   a justfile recipe
+//   task x                                                                   a Taskfile task
 //   dotnet test <path>  (also build, publish, restore, pack, clean, run --project)   a missing path
 //
 // The checks lean towards silence. A command is judged only when its script, target or path can
@@ -11,7 +12,7 @@
 import path from "node:path";
 import { exists, isDir, isFile } from "../fsutil.mjs";
 import { closest } from "../text.mjs";
-import { hasLocalBin, hasVenvBin, normalizePackage, readJustfile, readMakefile, readPyproject } from "./projectindex.mjs";
+import { hasLocalBin, hasVenvBin, normalizePackage, readJustfile, readMakefile, readPyproject, readTaskfile } from "./projectindex.mjs";
 
 const unique = (a) => [...new Set(a)];
 const unquote = (s) => s.replace(/^["'`]+|["'`]+$/g, "");
@@ -152,6 +153,49 @@ function justCommand(tokens, shown, env, state) {
     near ? `Use \`just ${near}\` if that is what was meant, or remove the line.` : "Add the recipe to the justfile, or remove the line.",
     { kind: "just", name: recipe, suggestion: near },
   );
+}
+
+// ---- Task ----
+
+const TASK_BUILTIN_FLAGS = new Set(["-l", "--list", "-a", "--list-all", "-i", "--init", "-h", "--help", "-v", "--version", "--status", "--summary"]);
+
+function taskfileFor(dirs, env) {
+  for (const start of dirs) {
+    for (let dir = start; ; dir = path.dirname(dir)) {
+      const tf = readTaskfile(dir);
+      if (tf) return { dir, tf };
+      if ((env && dir === env.project) || path.dirname(dir) === dir) break;
+    }
+  }
+  return null;
+}
+
+function taskCommand(tokens, shown, env, state) {
+  const args = tokens.slice(1);
+  if (args.some((a) => /^(-t|--taskfile(=.*)?|-d|--dir(=.*)?)$/.test(a) || /^-[td]./.test(a))) return null;
+  if (args.some((a) => TASK_BUILTIN_FLAGS.has(a))) return null;
+  const dashDash = args.indexOf("--");
+  const cmdArgs = dashDash !== -1 ? args.slice(0, dashDash) : args;
+  const targets = cmdArgs.filter((a) => !a.startsWith("-") && !a.includes("=") && !NOT_A_NAME.test(a) && !PLACEHOLDER_NAME.test(a));
+  if (!targets.length) return null;
+
+  const dirs = state.cwdAbs ? [state.cwdAbs] : unique([env.project, env.fileDir]);
+  const found = taskfileFor(dirs, env);
+  if (!found) {
+    if (env.index && env.index.scan().taskfiles.length) return null;
+    return stale(`\`${shown}\`: there is no Taskfile`, "Remove the line, or add the Taskfile it relies on.", { kind: "task", name: targets[0] });
+  }
+  for (const t of targets) {
+    if (found.tf.tasks.has(t)) continue;
+    if (found.tf.opaque) return null;
+    const near = closest(t, found.tf.tasks);
+    return stale(
+      `\`${shown}\`: the Taskfile has no "${t}" task`,
+      near ? `Use \`task ${near}\` if that is what was meant, or remove the line.` : "Add the task to the Taskfile, or remove the line.",
+      { kind: "task", name: t, suggestion: near },
+    );
+  }
+  return valid();
 }
 
 // ---- dotnet ----
@@ -371,6 +415,8 @@ export function commandRefs(text, env, state = {}) {
       result = makeCommand(tokens, shown, env, state);
     } else if (tokens[0] === "just") {
       result = justCommand(tokens, shown, env, state);
+    } else if (tokens[0] === "task") {
+      result = taskCommand(tokens, shown, env, state);
     } else if (tokens[0] === "dotnet") {
       result = dotnetCommand(tokens, shown, env, state);
     } else if (tokens[0] === "pdm") {
