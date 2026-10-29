@@ -11,7 +11,7 @@
 import path from "node:path";
 import { exists, isDir, isFile } from "../fsutil.mjs";
 import { closest } from "../text.mjs";
-import { hasLocalBin, readJustfile, readMakefile, readPyproject } from "./projectindex.mjs";
+import { hasLocalBin, hasVenvBin, normalizePackage, readJustfile, readMakefile, readPyproject } from "./projectindex.mjs";
 
 const unique = (a) => [...new Set(a)];
 const unquote = (s) => s.replace(/^["'`]+|["'`]+$/g, "");
@@ -192,6 +192,17 @@ function pyprojectFor(dirs, env) {
   return null;
 }
 
+// `pdm run` and `hatch run` run any command with the project's packages loaded, not only scripts. So a name that is
+// not a script is silent when it is python or pip, a package the pyproject.toml lists as a dependency (whatever
+// the table), an executable in the project's .venv, or a path to a file. `pdm run deploy` with none of these is reported.
+const PYTHON_RUNNERS = new Set(["python", "python3", "pip", "pip3"]);
+
+function runsAsTool(name, py, found, env) {
+  if (PYTHON_RUNNERS.has(name) || FILE_EXT.test(name) || /[\\/]/.test(name)) return true;
+  if (py.deps.has(normalizePackage(name))) return true;
+  return unique([found.dir, env.project]).some((dir) => hasVenvBin(dir, name));
+}
+
 function pdmCommand(tokens, shown, env, state) {
   const args = tokens.slice(1);
   const runIdx = args.findIndex((a) => !a.startsWith("-"));
@@ -206,6 +217,7 @@ function pdmCommand(tokens, shown, env, state) {
     return stale(`\`${shown}\`: there is no pyproject.toml`, "Remove the line, or add the pyproject.toml it relies on.", { kind: "pdm", name: script });
   }
   if (found.py.pdmScripts.has(script)) return valid();
+  if (found.py.opaque.pdm || runsAsTool(script, found.py, found, env)) return null;
   const near = closest(script, found.py.pdmScripts);
   const have = found.py.pdmScripts.size ? ` (it has: ${listNames(found.py.pdmScripts)})` : " (it has no scripts)";
   return stale(
@@ -213,6 +225,25 @@ function pdmCommand(tokens, shown, env, state) {
     near ? `Use \`pdm run ${near}\` if that is what was meant, or remove the line.` : "Add the script to [tool.pdm.scripts] in pyproject.toml, or remove the line.",
     { kind: "pdm", name: script, suggestion: near },
   );
+}
+
+/**
+ * The scripts an environment has: its own plus those of the environments named by its `template` (default: `default`),
+ * and so on up. { scripts } or, when the environment or one it inherits from cannot be found, { unknown: "env" | "template" }.
+ */
+function hatchScriptsOf(py, envName, seen = new Set()) {
+  if (seen.has(envName)) return { unknown: "template" };
+  seen.add(envName);
+  const own = py.hatchEnvs.get(envName);
+  if (!own && envName !== "default") return { unknown: seen.size === 1 ? "env" : "template" };
+  const scripts = new Set(own || []);
+  const parents = py.hatchTemplates.has(envName) ? py.hatchTemplates.get(envName) : envName === "default" ? [] : ["default"];
+  for (const parent of parents) {
+    const up = hatchScriptsOf(py, parent, seen);
+    if (up.unknown) return { unknown: "template" };
+    for (const s of up.scripts) scripts.add(s);
+  }
+  return { scripts };
 }
 
 function hatchCommand(tokens, shown, env, state) {
@@ -241,6 +272,7 @@ function hatchCommand(tokens, shown, env, state) {
     if (env.index && env.index.scan().pyprojects.length) return null;
     return stale(`\`${shown}\`: there is no pyproject.toml`, "Remove the line, or add the pyproject.toml it relies on.", { kind: "hatch", name: rawTarget });
   }
+  const py = found.py;
 
   let envName = explicitEnv;
   let scriptName = rawTarget;
@@ -250,26 +282,32 @@ function hatchCommand(tokens, shown, env, state) {
     scriptName = parts[1];
   }
 
-  if (envName) {
-    const envScripts = found.py.hatchEnvs.get(envName);
-    if (envScripts && envScripts.has(scriptName)) return valid();
-    const near = closest(scriptName, envScripts && envScripts.size ? envScripts : found.py.hatchScripts);
-    const suggestion = near ? (rawTarget.includes(":") ? `${envName}:${near}` : near) : null;
+  // a suggestion is only worth offering when it is not the command that was flagged
+  const report = (message, near, shownSuggestion) => {
+    const suggestion = near && shownSuggestion !== rawTarget ? shownSuggestion : null;
     return stale(
-      `\`${shown}\`: pyproject.toml has no "${rawTarget}" script`,
+      message,
       suggestion ? `Use \`hatch run ${suggestion}\` if that is what was meant, or remove the line.` : "Add the script to [tool.hatch.envs.<env>.scripts] in pyproject.toml, or remove the line.",
-      { kind: "hatch", name: rawTarget, suggestion: near },
+      { kind: "hatch", name: rawTarget, suggestion: suggestion ? near : null },
     );
+  };
+
+  if (envName) {
+    const chain = hatchScriptsOf(py, envName);
+    if (chain.scripts && chain.scripts.has(scriptName)) return valid();
+    if (py.opaque.hatch || runsAsTool(scriptName, py, found, env)) return null;
+    // an environment that cannot be resolved: made by a matrix (`test.py3.11`), or inheriting from one that is not here
+    if (chain.unknown === "template") return null;
+    if (chain.unknown === "env" && (py.hatchMatrix || envName.includes("."))) return null;
+    const near = closest(scriptName, chain.scripts && chain.scripts.size ? chain.scripts : py.hatchScripts);
+    return report(`\`${shown}\`: pyproject.toml has no "${rawTarget}" script`, near, rawTarget.includes(":") ? `${envName}:${near}` : near);
   }
 
-  if (found.py.hatchScripts.has(rawTarget)) return valid();
-  const near = closest(rawTarget, found.py.hatchScripts);
-  const have = found.py.hatchScripts.size ? ` (it has: ${listNames(found.py.hatchScripts)})` : " (it has no scripts)";
-  return stale(
-    `\`${shown}\`: pyproject.toml has no "${rawTarget}" script${have}`,
-    near ? `Use \`hatch run ${near}\` if that is what was meant, or remove the line.` : "Add the script to [tool.hatch.envs.<env>.scripts] in pyproject.toml, or remove the line.",
-    { kind: "hatch", name: rawTarget, suggestion: near },
-  );
+  if (py.hatchScripts.has(rawTarget)) return valid();
+  if (py.opaque.hatch || runsAsTool(rawTarget, py, found, env)) return null;
+  const near = closest(rawTarget, py.hatchScripts);
+  const have = py.hatchScripts.size ? ` (it has: ${listNames(py.hatchScripts)})` : " (it has no scripts)";
+  return report(`\`${shown}\`: pyproject.toml has no "${rawTarget}" script${have}`, near, near);
 }
 
 function poeCommand(tokens, shown, env, state) {
@@ -284,6 +322,7 @@ function poeCommand(tokens, shown, env, state) {
     return stale(`\`${shown}\`: there is no pyproject.toml`, "Remove the line, or add the pyproject.toml it relies on.", { kind: "poe", name: task });
   }
   if (found.py.poeTasks.has(task)) return valid();
+  if (found.py.opaque.poe) return null;
   const near = closest(task, found.py.poeTasks);
   const have = found.py.poeTasks.size ? ` (it has: ${listNames(found.py.poeTasks)})` : " (it has no tasks)";
   return stale(
