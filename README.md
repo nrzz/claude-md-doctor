@@ -57,7 +57,7 @@ A real run, with the paths shortened:
 
 ```text
 $ claude-md-doctor --budget 1500
-claude-md-doctor 1.0.2  token costs are estimates (see README)
+claude-md-doctor 1.1.0  token costs are estimates (see README)
 project  ~/work/shop
 config   ~/.claude
 
@@ -144,7 +144,7 @@ What `--fix` never does: rewrite the user-level memory, a memory file in a paren
 {
   "schema": 1,
   "tool": "claude-md-doctor",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "project": "C:/work/shop",             forward slashes on every system
   "configDir": "C:/Users/me/.claude",
   "budget": 2000,
@@ -359,7 +359,7 @@ What that does not tell you: how close it is to what Claude actually counts. Rea
 
 Checked on 2026-10-04 on Windows 11 with Node 24.19, git 2.55 and Claude Code 2.1.286:
 
-- **488 automated tests** (`npm test`, Node's own runner, no dependencies; one is skipped on Windows because it needs a `|` in a file name).
+- **518 automated tests** (`npm test`, Node's own runner, no dependencies; one is skipped on Windows because it needs a `|` in a file name).
 - **The checks, with true positives and false-positive guards.** Every finding has fixture projects in throwaway folders that must trigger it and ones that must not: URLs, globs, placeholders, dates, `and/or`, build output, gitignored paths, absolute paths, example-marked lines and a Windows path with spaces are not stale paths; an `@` in a code span, a code block, a comment, an e-mail address or `@types/node` is not an import; `use pnpm, not npm` and `npm install -g` are not package-manager conflicts; "follow best practices for React hooks" is not filler.
 - **Imports.** Relative, `~/` (with a temporary home folder), absolute and Windows-style imports, nesting at exactly 5 levels and a sixth, cycles, a file imported twice counted once, a folder and a binary file as targets.
 - **Discovery.** Parent folders up to a ceiling, outermost first; the user memory from a temporary `CLAUDE_CONFIG_DIR`; `--no-user`; on-demand files listed and not counted; a linked `CLAUDE.md` read once.
