@@ -244,6 +244,117 @@ test("just without a justfile is stale", () => {
   assert.match(stale(s, "stale-command")[0].message, /there is no justfile/);
 });
 
+test("pdm run with a script that is not in pyproject.toml", () => {
+  const toml = '[tool.pdm.scripts]\nlint = "flake8"\nbuild = "x"\n';
+  const s = project("Run `pdm run deploy`.\n", { "pyproject.toml": toml });
+  const [f] = stale(s, "stale-command");
+  assert.equal(f.severity, "warn");
+  assert.match(f.message, /pyproject\.toml has no "deploy" script/);
+  assert.equal(f.detail.name, "deploy");
+});
+
+test("pdm run without pyproject.toml is stale", () => {
+  const s = project("Run `pdm run lint`.\n");
+  const [f] = stale(s, "stale-command");
+  assert.match(f.message, /there is no pyproject\.toml/);
+});
+
+test("hatch run with a script that is not in pyproject.toml", () => {
+  const toml = '[tool.hatch.envs.default.scripts]\nlint = "flake8"\n';
+  const s = project("Run `hatch run deploy`.\n", { "pyproject.toml": toml });
+  const [f] = stale(s, "stale-command");
+  assert.match(f.message, /pyproject\.toml has no "deploy" script/);
+});
+
+test("hatch run env:script with an env or script that is not in pyproject.toml", () => {
+  const toml = '[tool.hatch.envs.test.scripts]\ncov = "pytest --cov"\n';
+  const s = project("Run `hatch run test:missing` and `hatch run other:cov`.\n", { "pyproject.toml": toml });
+  assert.deepEqual(stale(s, "stale-command").map((f) => f.detail.name).sort(), ["other:cov", "test:missing"]);
+});
+
+test("hatch run without pyproject.toml is stale", () => {
+  const s = project("Run `hatch run lint`.\n");
+  const [f] = stale(s, "stale-command");
+  assert.match(f.message, /there is no pyproject\.toml/);
+});
+
+test("poe with a task that is not in pyproject.toml", () => {
+  const toml = '[tool.poe.tasks]\nlint = "flake8"\n';
+  const s = project("Run `poe deploy`.\n", { "pyproject.toml": toml });
+  const [f] = stale(s, "stale-command");
+  assert.match(f.message, /pyproject\.toml has no "deploy" task/);
+  assert.equal(f.detail.name, "deploy");
+});
+
+test("poe without pyproject.toml is stale", () => {
+  const s = project("Run `poe lint`.\n");
+  const [f] = stale(s, "stale-command");
+  assert.match(f.message, /there is no pyproject\.toml/);
+});
+
+// pdm run and hatch run run any command with the project's packages, so only a name that is nothing of the kind is reported
+const PY_DEPS = [
+  "[project]",
+  'dependencies = ["requests>=2"]',
+  "[project.optional-dependencies]",
+  'docs = ["mkdocs"]',
+  "[dependency-groups]",
+  'lint = ["ruff", "mypy[faster-cache]>=1"]',
+  "[tool.pdm.dev-dependencies]",
+  'test = [',
+  '  "pytest>=7",  # the test runner',
+  '  "pytest-cov",',
+  "]",
+  "[tool.pdm.scripts]",
+  'lint = "ruff check"',
+  "[tool.hatch.envs.default.scripts]",
+  'lint = "ruff check"',
+  "[tool.hatch.envs.build]",
+  'dependencies = ["build"]',
+].join("\n");
+
+test("pdm run of something that is neither a script nor an installed tool is still stale", () => {
+  const s = project("Run `pdm run deploy`, `pdm run pytest` and `pdm run mypy src`.\n", { "pyproject.toml": PY_DEPS });
+  assert.deepEqual(stale(s, "stale-command").map((f) => f.detail.name), ["deploy"]);
+});
+
+test("hatch run of something that is neither a script nor an installed tool is still stale", () => {
+  const s = project("Run `hatch run deploy`, `hatch run python -m build` and `hatch run build:build`.\n", { "pyproject.toml": PY_DEPS });
+  assert.deepEqual(stale(s, "stale-command").map((f) => f.detail.name), ["deploy"]);
+});
+
+test("without a .venv or a dependency of that name, pdm run pytest is reported", () => {
+  const s = project("Run `pdm run pytest`.\n", { "pyproject.toml": '[tool.pdm.scripts]\nlint = "ruff"\n' });
+  assert.deepEqual(stale(s, "stale-command").map((f) => f.detail.name), ["pytest"]);
+});
+
+test("hatch run test:deploy is stale when no environment in the chain has it", () => {
+  const toml = '[tool.hatch.envs.default.scripts]\nlint = "ruff"\n[tool.hatch.envs.test.scripts]\ncov = "pytest --cov"\n';
+  const s = project("Run `hatch run test:deploy` and `hatch run test:lint`.\n", { "pyproject.toml": toml });
+  const found = stale(s, "stale-command");
+  assert.deepEqual(found.map((f) => f.detail.name), ["test:deploy"]);
+});
+
+test("hatch: the suggestion is never the command that was flagged", () => {
+  // lint exists only in the docs environment, which test does not inherit from
+  const toml = '[tool.hatch.envs.docs.scripts]\nlint = "x"\n[tool.hatch.envs.test]\ndependencies = ["pytest"]\n';
+  const s = project("Run `hatch run test:lint`.\n", { "pyproject.toml": toml });
+  const [f] = stale(s, "stale-command");
+  assert.match(f.message, /has no "test:lint" script/);
+  assert.doesNotMatch(f.fix, /Use `hatch run test:lint`/);
+  assert.equal(f.detail.suggestion, null);
+  // a near miss is still suggested, with the environment kept
+  const near = project("Run `hatch run test:lnt`.\n", { "pyproject.toml": '[tool.hatch.envs.default.scripts]\nlint = "x"\n[tool.hatch.envs.test]\ndependencies = ["pytest"]\n' });
+  const [g] = stale(near, "stale-command");
+  assert.match(g.fix, /Use `hatch run test:lint`/);
+});
+
+test("a script written as an inline table is read, so a script that is not in it is still stale", () => {
+  const toml = '[tool.pdm]\nscripts = { lint = "ruff" }\n[tool.poe]\ntasks = { fmt = "black ." }\n[tool.hatch.envs.default]\nscripts = { lint = "ruff" }\n';
+  const s = project("Run `pdm run deploy`, `poe deploy` and `hatch run deploy`.\n", { "pyproject.toml": toml });
+  assert.deepEqual(stale(s, "stale-command").map((f) => f.detail.name).sort(), ["deploy", "deploy", "deploy"]);
+});
+
 test("dotnet test with a project path that does not exist", () => {
   const s = project("`dotnet test tests/App.Tests/App.Tests.csproj` and `dotnet test src/real.ts`.\n");
   const found = stale(s, "stale-command");
@@ -298,6 +409,65 @@ okCmd("just with flags", "`just --list` and `just -f other deploy`.");
 okCmd("a justfile with imports", "`just anything`.", { justfile: "import 'common.just'\nbuild:\n  echo\n" });
 okCmd("dotnet commands without a path", "`dotnet test`, `dotnet build`, `dotnet run`, `dotnet restore`.");
 okCmd("dotnet with options first", "`dotnet test --no-build` and `dotnet build -c Release`.");
+okCmd("python tasks that exist", "`pdm run lint`, `hatch run lint`, `hatch run test:cov`, `poe format`.", {
+  "pyproject.toml": [
+    "[tool.pdm.scripts]",
+    'lint = "flake8"',
+    "[tool.hatch.envs.default.scripts]",
+    'lint = "flake8"',
+    "[tool.hatch.envs.test.scripts]",
+    'cov = "pytest --cov"',
+    "[tool.poe.tasks]",
+    'format = "black ."',
+  ].join("\n"),
+});
+okCmd("poetry run and uv run are left alone", "`poetry run pytest`, `uv run lint`.");
+okCmd("pdm and hatch commands that are not run", "`pdm install`, `pdm add requests`, `hatch env create`.");
+okCmd("python tasks with placeholders or flags", "`pdm run <task>`, `hatch run $ENV:test`, `poe --help`.");
+okCmd("pdm run and hatch run of python, pip and an installed tool", "`pdm run pytest`, `pdm run mypy src`, `pdm run pip list`, `pdm run python3 -m build`, `hatch run python -m build`, `hatch run pytest`, `hatch run build:build`.", {
+  "pyproject.toml": PY_DEPS,
+});
+okCmd("pdm run of python or pip needs no dependency", "`pdm run python -c 'print(1)'`, `pdm run pip install x`, `hatch run python3 -V`.", { "pyproject.toml": '[tool.pdm.scripts]\nlint = "ruff"\n' });
+okCmd("pdm run of a dependency in each table", "`pdm run requests`, `pdm run mkdocs build`, `pdm run ruff check`, `pdm run pytest-cov`, `pdm run Mypy`.", { "pyproject.toml": PY_DEPS });
+okCmd("pdm run of an executable in the project's .venv", "`pdm run mytool` and `pdm run othertool`.", {
+  "pyproject.toml": '[tool.pdm.scripts]\nlint = "ruff"\n',
+  ".venv/bin/mytool": "#!/bin/sh\n",
+  ".venv/Scripts/othertool.exe": "MZ",
+});
+okCmd("pdm run of a file", "`pdm run ./tools/check.sh` and `pdm run manage.py`.", { "pyproject.toml": '[tool.pdm.scripts]\nlint = "ruff"\n' });
+okCmd("hatch run test:lint inherits lint from default", "`hatch run test:lint` and `hatch run -e test lint`.", {
+  "pyproject.toml": '[tool.hatch.envs.default.scripts]\nlint = "ruff"\n[tool.hatch.envs.test]\ndependencies = ["pytest"]\n',
+});
+okCmd("hatch environments inherit through template", "`hatch run ci:cov`, `hatch run ci:lint` and `hatch run ci:fmt`.", {
+  "pyproject.toml": [
+    "[tool.hatch.envs.default.scripts]", 'lint = "ruff"',
+    "[tool.hatch.envs.test]", 'template = ["default"]', "[tool.hatch.envs.test.scripts]", 'cov = "pytest --cov"',
+    "[tool.hatch.envs.ci]", 'template = "test"', "[tool.hatch.envs.ci.scripts]", 'fmt = "black ."',
+  ].join("\n"),
+});
+okCmd("a hatch environment that inherits from one that is not here", "`hatch run ci:anything`.", {
+  "pyproject.toml": '[tool.hatch.envs.ci]\ntemplate = "elsewhere"\n',
+});
+okCmd("hatch environments made by a matrix", "`hatch run test.py3.11:cov` and `hatch run py3.11:cov`.", {
+  "pyproject.toml": '[tool.hatch.envs.test]\ndependencies = ["pytest"]\n[[tool.hatch.envs.test.matrix]]\npython = ["3.11", "3.12"]\n[tool.hatch.envs.test.scripts]\ncov = "pytest"\n',
+});
+okCmd("hatch environments defined in hatch.toml", "`hatch run docs:serve`.", { "pyproject.toml": "[tool.hatch]\n", "hatch.toml": '[envs.docs.scripts]\nserve = "mkdocs serve"\n' });
+okCmd("scripts and tasks written as inline tables", "`pdm run lint`, `hatch run lint`, `hatch run test:lint`, `poe fmt` and `poe test`.", {
+  "pyproject.toml": [
+    "[tool.pdm]", 'scripts = { lint = "ruff", "test" = { cmd = "pytest" } }',
+    "[tool.hatch.envs.default]", 'scripts = { lint = "ruff check ." }',
+    "[tool.hatch.envs.test]", 'dependencies = ["pytest"]',
+    "[tool.poe]", 'tasks = { fmt = "black .", test = { script = "pkg:run" } }',
+  ].join("\n"),
+});
+okCmd("scripts and tasks written as dotted keys or multi-line inline tables", "`pdm run lint`, `hatch run lint`, `poe fmt` and `poe test`.", {
+  "pyproject.toml": [
+    "[tool.pdm]", 'scripts.lint = "ruff"',
+    "[tool.hatch.envs.default]", "scripts = {", '  lint = "ruff check ."', "}",
+    "[tool.poe.tasks]", 'fmt = "black ."', 'test.script = "pkg:run"',
+  ].join("\n"),
+});
+okCmd("poe tasks kept in another file", "`poe anything`.", { "pyproject.toml": '[tool.poe]\ninclude = "tasks.toml"\n' });
 
 test("without any package.json there is nothing to compare npm commands with", () => {
   const s = sandbox({ "CLAUDE.md": "Run `npm run build`.\n" });

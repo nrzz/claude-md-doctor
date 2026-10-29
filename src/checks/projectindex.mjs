@@ -21,13 +21,14 @@ export class ProjectIndex {
     this.project = project;
     this._scan = null;
     this._pkg = new Map();
+    this._pyproject = new Map();
   }
 
   // One bounded walk: manifests, Makefiles and justfiles up to four folders deep, every file and
   // folder name up to six deep.
   scan() {
     if (this._scan) return this._scan;
-    const out = { manifests: [], makefiles: [], justfiles: [], names: new Map(), truncated: false };
+    const out = { manifests: [], pyprojects: [], makefiles: [], justfiles: [], names: new Map(), truncated: false };
     let entries = 0;
     const walk = (dir, depth) => {
       if (out.truncated) return;
@@ -35,6 +36,7 @@ export class ProjectIndex {
       if (depth <= MANIFEST_DEPTH) {
         const has = (n) => list.some((e) => e.name === n && !e.isDirectory());
         if (has("package.json")) out.manifests.push(dir);
+        if (has("pyproject.toml")) out.pyprojects.push(dir);
         if (MAKEFILES.some(has)) out.makefiles.push(dir);
         if (JUSTFILES.some(has)) out.justfiles.push(dir);
       }
@@ -82,6 +84,18 @@ export class ProjectIndex {
 
   hasAnyManifest() {
     return !!this.pkg(this.project) || this.scan().manifests.length > 0;
+  }
+
+  /** Parsed pyproject.toml in `dir`, or null when there is none. */
+  pyproject(dir) {
+    if (this._pyproject.has(dir)) return this._pyproject.get(dir);
+    const out = readPyproject(dir);
+    this._pyproject.set(dir, out);
+    return out;
+  }
+
+  hasAnyPyproject() {
+    return !!this.pyproject(this.project) || this.scan().pyprojects.length > 0;
   }
 
   /** Files or folders with the same name as `token`'s last segment, as project-relative paths. */
@@ -151,6 +165,214 @@ export function readBuildFile(dir, names, parse) {
 
 export const readMakefile = (dir) => readBuildFile(dir, MAKEFILES, parseMakefile);
 export const readJustfile = (dir) => readBuildFile(dir, JUSTFILES, parseJustfile);
+
+// ---- pyproject.toml tasks (pdm, hatch, poe) ----
+
+// pip's name rule (PEP 503): case, `-`, `_` and `.` do not matter.
+export const normalizePackage = (name) => String(name).toLowerCase().replace(/[-_.]+/g, "-");
+
+/** One line cut for the statement reader: the comment is dropped and the brackets are counted outside strings. */
+function scanTomlLine(raw, state) {
+  let out = "";
+  let delta = 0;
+  let i = 0;
+  if (state.multiline) { // inside a """ string: skip to its end
+    const end = raw.indexOf(state.multiline);
+    if (end === -1) return { text: "", delta: 0 };
+    raw = raw.slice(end + 3);
+    state.multiline = null;
+  }
+  for (; i < raw.length; i++) {
+    const c = raw[i];
+    if (c === '"' || c === "'") {
+      const triple = c.repeat(3);
+      if (raw.startsWith(triple, i)) {
+        const end = raw.indexOf(triple, i + 3);
+        if (end === -1) { state.multiline = triple; out += '""'; break; }
+        out += '""';
+        i = end + 2;
+        continue;
+      }
+      out += c;
+      for (i++; i < raw.length; i++) {
+        out += raw[i];
+        if (raw[i] === "\\" && c === '"') out += raw[++i] ?? "";
+        else if (raw[i] === c) break;
+      }
+      continue;
+    }
+    if (c === "#") break;
+    if (c === "[" || c === "{") delta++;
+    else if (c === "]" || c === "}") delta--;
+    out += c;
+  }
+  return { text: out.trim(), delta };
+}
+
+/** Index of the first `ch` outside quotes, or -1. */
+function indexOutsideQuotes(text, ch) {
+  let q = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === "\\" && q === '"') i++; else if (c === q) q = null; continue; }
+    if (c === '"' || c === "'") q = c;
+    else if (c === ch) return i;
+  }
+  return -1;
+}
+
+/** `a."b.c".d` -> ["a", "b.c", "d"] */
+function splitDotted(text) {
+  const parts = [];
+  let cur = "";
+  let q = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === q) q = null; else cur += c; continue; }
+    if (c === '"' || c === "'") q = c;
+    else if (c === ".") { parts.push(cur.trim()); cur = ""; }
+    else cur += c;
+  }
+  parts.push(cur.trim());
+  return parts.filter((p) => p !== "");
+}
+
+/** The quoted strings of an array or inline table value. */
+function stringsIn(value) {
+  const out = [];
+  const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'/g;
+  let m;
+  while ((m = re.exec(value))) out.push(m[1] ?? m[2]);
+  return out;
+}
+
+/** The top-level keys of an inline table `{ a = 1, b.c = "x" }`, or null when the value is not one. */
+function inlineKeys(value) {
+  const v = value.trim();
+  if (!v.startsWith("{")) return null;
+  const inner = v.slice(1, v.lastIndexOf("}") === -1 ? undefined : v.lastIndexOf("}"));
+  const keys = [];
+  let depth = 0;
+  let q = null;
+  let start = 0;
+  const take = (end) => {
+    const part = inner.slice(start, end);
+    const eq = indexOutsideQuotes(part, "=");
+    if (eq > 0) { const segs = splitDotted(part.slice(0, eq)); if (segs[0]) keys.push(segs[0]); }
+  };
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i];
+    if (q) { if (c === "\\" && q === '"') i++; else if (c === q) q = null; continue; }
+    if (c === '"' || c === "'") q = c;
+    else if (c === "[" || c === "{") depth++;
+    else if (c === "]" || c === "}") depth--;
+    else if (c === "," && depth === 0) { take(i); start = i + 1; }
+  }
+  take(inner.length);
+  return keys;
+}
+
+/**
+ * What the pyproject.toml defines, read line by line (a value may run over several lines):
+ * { pdmScripts: Set, hatchEnvs: Map<env, Set<script>>, hatchScripts: Set, hatchTemplates: Map<env, string[]>,
+ *   hatchMatrix: boolean, poeTasks: Set, deps: Set<normalized package name>,
+ *   opaque: { pdm, hatch, poe } (a part that is present but cannot be read: say nothing about it) }
+ * Scripts and tasks are read from tables (`[tool.pdm.scripts]`, `[tool.hatch.envs.x.scripts]`, `[tool.poe.tasks]`), from
+ * inline tables (`scripts = { lint = "..." }`) and from dotted keys (`scripts.lint = "..."`).
+ */
+export function parsePyproject(text) {
+  const pdmScripts = new Set();
+  const hatchEnvs = new Map();
+  const hatchScripts = new Set();
+  const hatchTemplates = new Map();
+  const poeTasks = new Set();
+  const deps = new Set();
+  const opaque = { pdm: false, hatch: false, poe: false };
+  let hatchMatrix = false;
+
+  const addDeps = (value) => { for (const s of stringsIn(value)) { const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(s); if (m) deps.add(normalizePackage(m[1])); } };
+  const defineEnv = (env) => { if (!hatchEnvs.has(env)) hatchEnvs.set(env, new Set()); return hatchEnvs.get(env); };
+  const names = (set, p, at, value) => { // a table or key at p[at - 1] holds the names: p[at] if there is one, else the inline table's keys
+    if (p.length > at) set.add(p[at]);
+    else for (const k of inlineKeys(value || "") || []) set.add(k);
+  };
+
+  // p: the key as a path of names; value: the text after `=` (null for a table header)
+  const handle = (p, value) => {
+    if (p[0] === "project" && (p[1] === "dependencies" || p[1] === "optional-dependencies")) { if (value) addDeps(value); return; }
+    if (p[0] === "dependency-groups") { if (value) addDeps(value); return; }
+    if (p[0] !== "tool") return;
+    const v = value || "";
+    if (p.length === 1 && v.trim().startsWith("{")) { opaque.pdm = opaque.hatch = opaque.poe = true; return; }
+    if (p[1] === "pdm") {
+      if (p.length === 2 && v.trim().startsWith("{")) opaque.pdm = true;
+      else if (p[2] === "scripts") names(pdmScripts, p, 3, v);
+      else if (p[2] === "dev-dependencies" && value) addDeps(value);
+    } else if (p[1] === "poe") {
+      if (p.length === 2 && v.trim().startsWith("{")) opaque.poe = true;
+      else if (p[2] === "tasks") names(poeTasks, p, 3, v);
+      else if (p[2] === "include" || p[2] === "includes") opaque.poe = true; // tasks kept in other files
+    } else if (p[1] === "hatch") {
+      if (p[2] !== "envs") return;
+      if (p.length === 3) { if (v.trim().startsWith("{")) opaque.hatch = true; return; }
+      const env = p[3];
+      const own = defineEnv(env);
+      if (p[4] === "scripts") {
+        const before = new Set(own);
+        names(own, p, 5, v);
+        for (const s of own) if (!before.has(s)) hatchScripts.add(s);
+      } else if (p[4] === "template" && value) hatchTemplates.set(env, stringsIn(value));
+      else if ((p[4] === "dependencies" || p[4] === "extra-dependencies") && value) addDeps(value);
+      else if (p[4] === "matrix") hatchMatrix = true;
+    }
+  };
+
+  let header = [];
+  let pending = null; // a key whose value runs over several lines
+  let depth = 0;
+  const state = { multiline: null };
+  const finish = () => {
+    const eq = indexOutsideQuotes(pending, "=");
+    if (eq > 0) handle(header.concat(splitDotted(pending.slice(0, eq))), pending.slice(eq + 1).trim());
+    pending = null;
+    depth = 0;
+  };
+  for (const raw of text.split(/\r?\n/)) {
+    const { text: line, delta } = scanTomlLine(raw, state);
+    if (!line) continue;
+    if (pending === null) {
+      const h = /^\[\[?\s*(.+?)\s*\]\]?$/.exec(line);
+      if (h && !line.includes("=")) { header = splitDotted(h[1]); handle(header, null); continue; }
+      pending = line;
+      depth = delta;
+    } else {
+      pending += ` ${line}`;
+      depth += delta;
+    }
+    if (depth <= 0) finish();
+  }
+  if (pending !== null) finish();
+
+  return { pdmScripts, hatchEnvs, hatchScripts, hatchTemplates, hatchMatrix, poeTasks, deps, opaque };
+}
+
+export function readPyproject(dir) {
+  const file = path.join(dir, "pyproject.toml");
+  if (!isFile(file)) return null;
+  const info = readFileText(file);
+  if (info && !info.binary && !info.tooLarge) {
+    const py = parsePyproject(info.text);
+    if (isFile(path.join(dir, "hatch.toml"))) py.opaque.hatch = true; // environments may be defined there
+    return py;
+  }
+  return null;
+}
+
+/** Is `name` an executable in the project's virtual environment (`.venv/bin` or `.venv/Scripts`)? */
+export function hasVenvBin(dir, name) {
+  if (/[\\/]/.test(name)) return false;
+  return ["bin", "Scripts"].some((sub) => [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`].some((n) => isFile(path.join(dir, ".venv", sub, n))));
+}
 
 /** Does `node_modules/.bin/<name>` exist in `dir` (a locally installed tool)? */
 export function hasLocalBin(dir, name) {

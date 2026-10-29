@@ -208,6 +208,7 @@ A command that names something that is not there:
 - `npm run x`, `npm test`, `pnpm x`, `pnpm run x`, `yarn x`, `bun run x` where script `x` is in no `package.json` of the project;
 - `make x` where the Makefile has no target `x` (or there is no Makefile);
 - `just x` where the justfile has no recipe `x`;
+- Python task runners: `pdm run x` (`[tool.pdm.scripts]`), `hatch run x` or `hatch run env:x` (`[tool.hatch.envs.<env>.scripts]`), `poe x` (`[tool.poe.tasks]`) where the script or task is not in `pyproject.toml` (or there is no `pyproject.toml`);
 - `dotnet test <path>` (and `build`, `publish`, `restore`, `pack`, `clean`, `run --project`) where the path does not exist.
 
 ```text
@@ -217,7 +218,7 @@ WARN  stale-command  CLAUDE.md:7
       fix: Add a "lint" script to package.json, or remove the line.
 ```
 
-Commands in backticks and in shell code blocks are checked; in plain prose only the explicit `npm run x` forms are, so "use yarn workspaces" is safe. It stays silent when something else could explain the command: workspace and prefix flags (`--workspace`, `--filter`, `-C`), a `cd` into a folder it cannot see, a script that exists in another package of the repository, tools installed as binaries (`yarn tsc`), a Makefile that includes other files, placeholders such as `<script>`. A near miss is suggested ("Use `npm run test` if that is what was meant, or remove the line.").
+Commands in backticks and in shell code blocks are checked; in plain prose only the explicit `run` forms (`npm run x`, `pdm run x`, `hatch run x`) are, so "use yarn workspaces" is safe. It stays silent when something else could explain the command: workspace and prefix flags (`--workspace`, `--filter`, `-C`), a `cd` into a folder it cannot see, a script that exists in another package of the repository, tools installed as binaries (`yarn tsc`), a Makefile that includes other files, placeholders such as `<script>`. `pdm run` and `hatch run` also run any installed tool, so `pdm run pytest` is fine when `python`, `pip`, a dependency of `pyproject.toml` or an executable in `.venv` has that name, and a Hatch environment finds the scripts of the environment it inherits from (`template`, default `default`); scripts written as inline tables are read. A near miss is suggested ("Use `npm run test` if that is what was meant, or remove the line.").
 
 ### `duplicate`
 

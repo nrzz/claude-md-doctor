@@ -11,7 +11,7 @@
 import path from "node:path";
 import { exists, isDir, isFile } from "../fsutil.mjs";
 import { closest } from "../text.mjs";
-import { hasLocalBin, readJustfile, readMakefile } from "./projectindex.mjs";
+import { hasLocalBin, hasVenvBin, normalizePackage, readJustfile, readMakefile, readPyproject } from "./projectindex.mjs";
 
 const unique = (a) => [...new Set(a)];
 const unquote = (s) => s.replace(/^["'`]+|["'`]+$/g, "");
@@ -179,6 +179,159 @@ function dotnetCommand(tokens, shown, env, state) {
   return stale(`\`${shown}\`: ${rel} does not exist`, `Point it at the real project or solution file, or remove the line.`, { kind: "dotnet", name: rel });
 }
 
+// ---- Python task runners (pdm, hatch, poe) ----
+
+function pyprojectFor(dirs, env) {
+  for (const start of dirs) {
+    for (let dir = start; ; dir = path.dirname(dir)) {
+      const py = env.index ? env.index.pyproject(dir) : readPyproject(dir);
+      if (py) return { dir, py };
+      if (dir === env.project || path.dirname(dir) === dir) break;
+    }
+  }
+  return null;
+}
+
+// `pdm run` and `hatch run` run any command with the project's packages loaded, not only scripts. So a name that is
+// not a script is silent when it is python or pip, a package the pyproject.toml lists as a dependency (whatever
+// the table), an executable in the project's .venv, or a path to a file. `pdm run deploy` with none of these is reported.
+const PYTHON_RUNNERS = new Set(["python", "python3", "pip", "pip3"]);
+
+function runsAsTool(name, py, found, env) {
+  if (PYTHON_RUNNERS.has(name) || FILE_EXT.test(name) || /[\\/]/.test(name)) return true;
+  if (py.deps.has(normalizePackage(name))) return true;
+  return unique([found.dir, env.project]).some((dir) => hasVenvBin(dir, name));
+}
+
+function pdmCommand(tokens, shown, env, state) {
+  const args = tokens.slice(1);
+  const runIdx = args.findIndex((a) => !a.startsWith("-"));
+  if (runIdx === -1 || args[runIdx] !== "run") return null;
+  const script = args.slice(runIdx + 1).find((a) => !a.startsWith("-"));
+  if (!script || PLACEHOLDER_NAME.test(script) || NOT_A_NAME.test(script)) return null;
+
+  const dirs = state.cwdAbs ? [state.cwdAbs] : unique([env.project, env.fileDir]);
+  const found = pyprojectFor(dirs, env);
+  if (!found) {
+    if (env.index && env.index.scan().pyprojects.length) return null;
+    return stale(`\`${shown}\`: there is no pyproject.toml`, "Remove the line, or add the pyproject.toml it relies on.", { kind: "pdm", name: script });
+  }
+  if (found.py.pdmScripts.has(script)) return valid();
+  if (found.py.opaque.pdm || runsAsTool(script, found.py, found, env)) return null;
+  const near = closest(script, found.py.pdmScripts);
+  const have = found.py.pdmScripts.size ? ` (it has: ${listNames(found.py.pdmScripts)})` : " (it has no scripts)";
+  return stale(
+    `\`${shown}\`: pyproject.toml has no "${script}" script${have}`,
+    near ? `Use \`pdm run ${near}\` if that is what was meant, or remove the line.` : "Add the script to [tool.pdm.scripts] in pyproject.toml, or remove the line.",
+    { kind: "pdm", name: script, suggestion: near },
+  );
+}
+
+/**
+ * The scripts an environment has: its own plus those of the environments named by its `template` (default: `default`),
+ * and so on up. { scripts } or, when the environment or one it inherits from cannot be found, { unknown: "env" | "template" }.
+ */
+function hatchScriptsOf(py, envName, seen = new Set()) {
+  if (seen.has(envName)) return { unknown: "template" };
+  seen.add(envName);
+  const own = py.hatchEnvs.get(envName);
+  if (!own && envName !== "default") return { unknown: seen.size === 1 ? "env" : "template" };
+  const scripts = new Set(own || []);
+  const parents = py.hatchTemplates.has(envName) ? py.hatchTemplates.get(envName) : envName === "default" ? [] : ["default"];
+  for (const parent of parents) {
+    const up = hatchScriptsOf(py, parent, seen);
+    if (up.unknown) return { unknown: "template" };
+    for (const s of up.scripts) scripts.add(s);
+  }
+  return { scripts };
+}
+
+function hatchCommand(tokens, shown, env, state) {
+  const args = tokens.slice(1);
+  const runIdx = args.findIndex((a) => !a.startsWith("-"));
+  if (runIdx === -1 || args[runIdx] !== "run") return null;
+  const rest = args.slice(runIdx + 1);
+  let explicitEnv = null;
+  const nonFlags = [];
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i];
+    if (t === "-e" || t === "--env") {
+      explicitEnv = rest[++i];
+    } else if (t.startsWith("--env=")) {
+      explicitEnv = t.slice("--env=".length);
+    } else if (!t.startsWith("-")) {
+      nonFlags.push(t);
+    }
+  }
+  const rawTarget = nonFlags[0];
+  if (!rawTarget || PLACEHOLDER_NAME.test(rawTarget) || NOT_A_NAME.test(rawTarget)) return null;
+
+  const dirs = state.cwdAbs ? [state.cwdAbs] : unique([env.project, env.fileDir]);
+  const found = pyprojectFor(dirs, env);
+  if (!found) {
+    if (env.index && env.index.scan().pyprojects.length) return null;
+    return stale(`\`${shown}\`: there is no pyproject.toml`, "Remove the line, or add the pyproject.toml it relies on.", { kind: "hatch", name: rawTarget });
+  }
+  const py = found.py;
+
+  let envName = explicitEnv;
+  let scriptName = rawTarget;
+  if (rawTarget.includes(":")) {
+    const parts = rawTarget.split(":");
+    envName = parts[0] || "default";
+    scriptName = parts[1];
+  }
+
+  // a suggestion is only worth offering when it is not the command that was flagged
+  const report = (message, near, shownSuggestion) => {
+    const suggestion = near && shownSuggestion !== rawTarget ? shownSuggestion : null;
+    return stale(
+      message,
+      suggestion ? `Use \`hatch run ${suggestion}\` if that is what was meant, or remove the line.` : "Add the script to [tool.hatch.envs.<env>.scripts] in pyproject.toml, or remove the line.",
+      { kind: "hatch", name: rawTarget, suggestion: suggestion ? near : null },
+    );
+  };
+
+  if (envName) {
+    const chain = hatchScriptsOf(py, envName);
+    if (chain.scripts && chain.scripts.has(scriptName)) return valid();
+    if (py.opaque.hatch || runsAsTool(scriptName, py, found, env)) return null;
+    // an environment that cannot be resolved: made by a matrix (`test.py3.11`), or inheriting from one that is not here
+    if (chain.unknown === "template") return null;
+    if (chain.unknown === "env" && (py.hatchMatrix || envName.includes("."))) return null;
+    const near = closest(scriptName, chain.scripts && chain.scripts.size ? chain.scripts : py.hatchScripts);
+    return report(`\`${shown}\`: pyproject.toml has no "${rawTarget}" script`, near, rawTarget.includes(":") ? `${envName}:${near}` : near);
+  }
+
+  if (py.hatchScripts.has(rawTarget)) return valid();
+  if (py.opaque.hatch || runsAsTool(rawTarget, py, found, env)) return null;
+  const near = closest(rawTarget, py.hatchScripts);
+  const have = py.hatchScripts.size ? ` (it has: ${listNames(py.hatchScripts)})` : " (it has no scripts)";
+  return report(`\`${shown}\`: pyproject.toml has no "${rawTarget}" script${have}`, near, near);
+}
+
+function poeCommand(tokens, shown, env, state) {
+  const args = tokens.slice(1);
+  const task = args.find((a) => !a.startsWith("-"));
+  if (!task || PLACEHOLDER_NAME.test(task) || NOT_A_NAME.test(task)) return null;
+
+  const dirs = state.cwdAbs ? [state.cwdAbs] : unique([env.project, env.fileDir]);
+  const found = pyprojectFor(dirs, env);
+  if (!found) {
+    if (env.index && env.index.scan().pyprojects.length) return null;
+    return stale(`\`${shown}\`: there is no pyproject.toml`, "Remove the line, or add the pyproject.toml it relies on.", { kind: "poe", name: task });
+  }
+  if (found.py.poeTasks.has(task)) return valid();
+  if (found.py.opaque.poe) return null;
+  const near = closest(task, found.py.poeTasks);
+  const have = found.py.poeTasks.size ? ` (it has: ${listNames(found.py.poeTasks)})` : " (it has no tasks)";
+  return stale(
+    `\`${shown}\`: pyproject.toml has no "${task}" task${have}`,
+    near ? `Use \`poe ${near}\` if that is what was meant, or remove the line.` : "Add the task to [tool.poe.tasks] in pyproject.toml, or remove the line.",
+    { kind: "poe", name: task, suggestion: near },
+  );
+}
+
 // ---- entry points ----
 
 /**
@@ -220,6 +373,12 @@ export function commandRefs(text, env, state = {}) {
       result = justCommand(tokens, shown, env, state);
     } else if (tokens[0] === "dotnet") {
       result = dotnetCommand(tokens, shown, env, state);
+    } else if (tokens[0] === "pdm") {
+      result = pdmCommand(tokens, shown, env, state);
+    } else if (tokens[0] === "hatch") {
+      result = hatchCommand(tokens, shown, env, state);
+    } else if (tokens[0] === "poe" || tokens[0] === "poethepoet") {
+      result = poeCommand(tokens, shown, env, state);
     }
     if (result) out.push({ text: shown, ...result });
   }
@@ -229,7 +388,7 @@ export function commandRefs(text, env, state = {}) {
 /** `npm run x` style commands in plain prose (outside backticks): only the explicit "run" forms. */
 export function proseCommandRefs(text, env) {
   const out = [];
-  const re = /\b(npm|pnpm|yarn|bun)\s+run(?:-script)?\s+([^\s`"')\],;]+)([^.\n]{0,40})/g;
+  const re = /\b(npm|pnpm|yarn|bun|pdm|hatch)\s+run(?:-script)?\s+([^\s`"')\],;]+)([^.\n]{0,40})/g;
   let m;
   while ((m = re.exec(text))) {
     if (/\s(-w|--workspaces?|--prefix|--filter|-C|--if-present)\b/.test(m[3])) continue;
