@@ -15,6 +15,10 @@ const MANIFEST_DEPTH = 4;
 
 const MAKEFILES = ["Makefile", "makefile", "GNUmakefile"];
 const JUSTFILES = ["justfile", "Justfile", ".justfile"];
+const TASKFILES = [
+  "Taskfile.yml", "Taskfile.yaml", "taskfile.yml", "taskfile.yaml",
+  "Taskfile.dist.yml", "Taskfile.dist.yaml", "taskfile.dist.yml", "taskfile.dist.yaml",
+];
 
 export class ProjectIndex {
   constructor(project) {
@@ -28,7 +32,7 @@ export class ProjectIndex {
   // folder name up to six deep.
   scan() {
     if (this._scan) return this._scan;
-    const out = { manifests: [], pyprojects: [], makefiles: [], justfiles: [], names: new Map(), truncated: false };
+    const out = { manifests: [], pyprojects: [], makefiles: [], justfiles: [], taskfiles: [], names: new Map(), truncated: false };
     let entries = 0;
     const walk = (dir, depth) => {
       if (out.truncated) return;
@@ -39,6 +43,7 @@ export class ProjectIndex {
         if (has("pyproject.toml")) out.pyprojects.push(dir);
         if (MAKEFILES.some(has)) out.makefiles.push(dir);
         if (JUSTFILES.some(has)) out.justfiles.push(dir);
+        if (TASKFILES.some(has)) out.taskfiles.push(dir);
       }
       for (const e of list) {
         if (++entries > MAX_ENTRIES) { out.truncated = true; return; }
@@ -152,7 +157,95 @@ export function parseJustfile(text) {
   return { recipes, opaque };
 }
 
-/** The Makefile or justfile in `dir`, parsed, or null. */
+function stripYamlComment(raw) {
+  let q = null;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (q) {
+      if (c === "\\" && q === '"') { i++; continue; }
+      if (c === q) q = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      q = c;
+    } else if (c === "#") {
+      return raw.slice(0, i);
+    }
+  }
+  return raw;
+}
+
+function findMappingColon(text) {
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === ":") {
+      if (i === text.length - 1 || text[i + 1] === " " || text[i + 1] === "\t") {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
+/** { tasks: Set, opaque } where opaque means includes hide some tasks. */
+export function parseTaskfile(text) {
+  const tasks = new Set();
+  let opaque = false;
+  let inTasks = false;
+  let taskIndent = null;
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = stripYamlComment(raw).trimEnd();
+    if (!line.trim()) continue;
+
+    const indent = line.match(/^\s*/)[0].length;
+    if (indent === 0) {
+      inTasks = /^tasks\s*:/.test(line);
+      taskIndent = null;
+      if (/^includes?\s*:/.test(line)) {
+        opaque = true;
+      }
+      continue;
+    }
+
+    if (inTasks) {
+      if (taskIndent === null) {
+        taskIndent = indent;
+      }
+      if (indent === taskIndent) {
+        const trimmed = line.slice(indent);
+        if (trimmed.startsWith("-")) continue;
+        let key = null;
+        if (trimmed.startsWith('"')) {
+          let end = -1;
+          for (let i = 1; i < trimmed.length; i++) {
+            if (trimmed[i] === "\\" && trimmed[i + 1] === '"') { i++; continue; }
+            if (trimmed[i] === '"') { end = i; break; }
+          }
+          if (end !== -1 && trimmed.slice(end + 1).trimStart().startsWith(":")) {
+            key = trimmed.slice(1, end);
+          }
+        } else if (trimmed.startsWith("'")) {
+          const end = trimmed.indexOf("'", 1);
+          if (end !== -1 && trimmed.slice(end + 1).trimStart().startsWith(":")) {
+            key = trimmed.slice(1, end);
+          }
+        } else {
+          const colonIdx = findMappingColon(trimmed);
+          if (colonIdx > 0) {
+            key = trimmed.slice(0, colonIdx).trim();
+          }
+        }
+        if (key) {
+          tasks.add(key);
+        }
+      }
+    }
+  }
+
+  return { tasks, opaque };
+}
+
+/** The Makefile, justfile or Taskfile in `dir`, parsed, or null. */
 export function readBuildFile(dir, names, parse) {
   for (const n of names) {
     const file = path.join(dir, n);
@@ -165,6 +258,7 @@ export function readBuildFile(dir, names, parse) {
 
 export const readMakefile = (dir) => readBuildFile(dir, MAKEFILES, parseMakefile);
 export const readJustfile = (dir) => readBuildFile(dir, JUSTFILES, parseJustfile);
+export const readTaskfile = (dir) => readBuildFile(dir, TASKFILES, parseTaskfile);
 
 // ---- pyproject.toml tasks (pdm, hatch, poe) ----
 

@@ -208,6 +208,7 @@ A command that names something that is not there:
 - `npm run x`, `npm test`, `pnpm x`, `pnpm run x`, `yarn x`, `bun run x` where script `x` is in no `package.json` of the project;
 - `make x` where the Makefile has no target `x` (or there is no Makefile);
 - `just x` where the justfile has no recipe `x`;
+- `task x` where the Taskfile has no task `x` (or there is no Taskfile);
 - Python task runners: `pdm run x` (`[tool.pdm.scripts]`), `hatch run x` or `hatch run env:x` (`[tool.hatch.envs.<env>.scripts]`), `poe x` (`[tool.poe.tasks]`) where the script or task is not in `pyproject.toml` (or there is no `pyproject.toml`);
 - `dotnet test <path>` (and `build`, `publish`, `restore`, `pack`, `clean`, `run --project`) where the path does not exist.
 

@@ -244,6 +244,24 @@ test("just without a justfile is stale", () => {
   assert.match(stale(s, "stale-command")[0].message, /there is no justfile/);
 });
 
+test("task with a task that is not in the Taskfile", () => {
+  const yaml = "version: '3'\ntasks:\n  build:\n    cmds:\n      - echo b\n  test:\n    cmds:\n      - echo t\n";
+  const s = project("`task ship` and `task build`.\n", { "Taskfile.yml": yaml });
+  assert.deepEqual(stale(s, "stale-command").map((f) => f.detail.name), ["ship"]);
+});
+
+test("task without a Taskfile is stale", () => {
+  const s = project("Run `task build`.\n");
+  assert.match(stale(s, "stale-command")[0].message, /there is no Taskfile/);
+});
+
+test("task suggests a near miss", () => {
+  const s = project("Use `task tets`.\n", { "Taskfile.yml": "tasks:\n  test:\n    cmds:\n      - echo\n" });
+  const [f] = stale(s, "stale-command");
+  assert.equal(f.detail.suggestion, "test");
+  assert.match(f.fix, /task test/);
+});
+
 test("pdm run with a script that is not in pyproject.toml", () => {
   const toml = '[tool.pdm.scripts]\nlint = "flake8"\nbuild = "x"\n';
   const s = project("Run `pdm run deploy`.\n", { "pyproject.toml": toml });
@@ -407,6 +425,13 @@ okCmd("a Makefile that includes others", "`make anything`.", { Makefile: "includ
 okCmd("make for a file that exists", "`make src/real.ts`.", { Makefile: "build:\n\techo\n" });
 okCmd("just with flags", "`just --list` and `just -f other deploy`.");
 okCmd("a justfile with imports", "`just anything`.", { justfile: "import 'common.just'\nbuild:\n  echo\n" });
+okCmd("task tasks that exist", "`task lint`, `task test:unit`, `task build`.", {
+  "Taskfile.yml": "version: '3'\ntasks:\n  lint:\n    cmds:\n      - echo\n  test:unit:\n    cmds:\n      - echo\n  build:\n    cmds:\n      - echo\n",
+});
+okCmd("task with flags that change the taskfile or dir", "`task -t other.yml deploy`, `task --taskfile other.yml deploy`, `task -d sub lint`, `task --dir sub lint`.");
+okCmd("task with built-in flags", "`task --list`, `task --init`, `task -l`, `task -a`.");
+okCmd("a Taskfile with includes", "`task anything`.", { "Taskfile.yml": "includes:\n  docs: ./docs\ntasks:\n  build:\n    cmds:\n      - echo\n" });
+okCmd("task with placeholders or no task name", "`task <name>`, `task <task>`, `task x`, `task`.");
 okCmd("dotnet commands without a path", "`dotnet test`, `dotnet build`, `dotnet run`, `dotnet restore`.");
 okCmd("dotnet with options first", "`dotnet test --no-build` and `dotnet build -c Release`.");
 okCmd("python tasks that exist", "`pdm run lint`, `hatch run lint`, `hatch run test:cov`, `poe format`.", {
